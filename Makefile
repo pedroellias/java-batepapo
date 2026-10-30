@@ -1,12 +1,19 @@
 PASTA_SRC    = src
 PASTA_BIN    = bin
-ARQUIVOS_SRC = $(wildcard $(PASTA_SRC)/*.java)
 FLAGS        = -Xlint:all
 
-# $(info ARQUIVOS_SRC = $(ARQUIVOS_SRC))
+ARQUIVOS_SRC = $(wildcard $(PASTA_SRC)/*.java)
+ARQUIVOS_OBJ = $(patsubst $(PASTA_SRC)/%.java, $(PASTA_BIN)/%.class, $(ARQUIVOS_SRC))
 
-all: $(PASTA_BIN)
-	javac $(FLAGS) -d $(PASTA_BIN) $(ARQUIVOS_SRC)
+# $(info ARQUIVOS_SRC = $(ARQUIVOS_SRC))
+# $(info ARQUIVOS_OBJ = $(ARQUIVOS_OBJ))
+
+.PHONY: all Servidor Cliente clean
+
+all: $(ARQUIVOS_OBJ)
+
+$(PASTA_BIN)/%.class: $(PASTA_SRC)/%.java | $(PASTA_BIN)
+	javac $(FLAGS) -d $(PASTA_BIN) $<
 
 $(PASTA_BIN):
 	mkdir -p $(PASTA_BIN)
@@ -19,4 +26,3 @@ Cliente: all
 
 clean:
 	rm -rf $(PASTA_BIN)
-

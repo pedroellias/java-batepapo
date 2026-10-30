@@ -1,206 +1,199 @@
+import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.PrintStream;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Hashtable;
+import java.util.Map;
 import java.util.Scanner;
 
 public class Servidor {
-    private static final String ENDEREÇO = "127.0.0.1";
-    private static final int PORTA = 6767;
-    private static final int MAX_CONEXOES = 4;
-    private List<Conexao> conexoes;
-    private boolean rodando;
-    ServerSocket servidor;
-    Scanner teclado;
+    private final String endereço;
+    private final int porta;
+    private boolean conectado;
+    private Map<String, GerenciadorCliente> clientes;
+
+    private ServerSocket socket;
     
-    public Servidor() {
-        try {
-            this.servidor = new ServerSocket(PORTA, MAX_CONEXOES, InetAddress.getByName(ENDEREÇO));
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-        this.teclado = new Scanner(System.in);
-        this.conexoes = new ArrayList<>(MAX_CONEXOES);
+    public Servidor(String endereço, int porta) throws IOException {
+        this.endereço = endereço;
+        this.porta = porta;
+        this.conectado = true;
+        this.clientes = new Hashtable<>();
+        this.socket = new ServerSocket(porta, 10, InetAddress.getByName(endereço));
     }
 
-    public synchronized void addConexao(Conexao c) {
-        System.out.println("SERVIDOR: Cliente \"" + c.nome + "\" conectado com sucesso!");
-        broadcastMensagemServidor(c.nome + " entrou no chat. Dê boas vindas!");
-        conexoes.add(c);
-    }
-    
-    public synchronized void removerConexao(Conexao c) {
-        System.out.println("SERVIDOR: Cliente \"" + c.nome + "\" saiu do servidor.");
-        conexoes.remove(c);
-        c.clienteIn.close();
-        c.clienteOut.close();
-        try {
-            c.clienteSocket.close();
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-    }
-    
-    public synchronized void encerrar() {
-        broadcastMensagemServidor("O servidor foi encerrado.");
-        System.out.println("SERVIDOR: Fechando conexões...");
-        for (Conexao c : conexoes) {
-            removerConexao(c);
-        }
-        System.out.println("saiu do for ------------------------");
-        teclado.close();
-        try {
-            servidor.close();
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-        System.out.println("SERVIDOR: Servidor encerrado com sucesso");
-    }
-
-    public synchronized void broadcastMensagem(Conexao remetente, String msg) {
-        String msgCompleta = "" + remetente.nome + ": " + msg;
-        // System.out.println(msgCompleta);
-        for (Conexao c : conexoes) {
-            if (c.equals(remetente)) continue;
-            c.clienteOut.println(msgCompleta);
-        }
-    }
-
-    private synchronized void broadcastMensagemServidor(String msg) {
-        for (Conexao c : conexoes) {
-            c.clienteOut.println("SERVIDOR: " + msg);
-        }
-    }
-
-    public void info() {
-        System.out.println(String.format("Clientes conectados: (%d/%d)\n%s\n", conexoes.size(), MAX_CONEXOES, conexoes));
-    }
-
-    public void help() {
-        System.out.println("Comandos disponíveis:\n\t'help' -- Mostra essa mensagem.\n\t'info' -- Mostra informações sobre as conexões atuais.\n\t'exit' -- Encerra o servidor.");
-    }
-    
-    public void iniciar() {
-        this.rodando = true;
-        new Gerenciador(teclado, this);
-
-        System.out.println("SERVIDOR: Socket em " + ENDEREÇO + ":" + PORTA + " aberto!");
-        System.out.println("Digite 'help' para ver os comandos disponíveis.");
-
-        Socket cliente;
-        while (rodando) {
-            System.out.println("SERVIDOR: Aguardando conexão com cliente...");
+    public void executar() {
+        this.log("Escutando clientes em " + endereço + ":" + porta);
+        while (conectado) {
             try {
-                cliente = servidor.accept();
+                Socket novoCliente = socket.accept();
+                new GerenciadorCliente(this, novoCliente);
             } catch (IOException e) {
-                // TODO: lidar com esse erro no caso do servidor encerrar enquanto espera uma conexão
-                System.err.println("SERVIDOR: erro fatal no socket servidor. Encerrando...");
-                //encerrar();
-                break;
+                if (conectado) e.printStackTrace();
             }
-            System.out.println("SERVIDOR: Conexão estabelecida com cliente em " + cliente.getInetAddress());
-            
-            Scanner leitor;
-            PrintStream saida;
-            try {
-                leitor = new Scanner(cliente.getInputStream());
-                saida = new PrintStream(cliente.getOutputStream());
-            } catch (IOException e) {
-                System.err.println("SERVIDOR: erro fatal ao obter canal de entrada do cliente. Encerrando...");
-                encerrar();
-                break;
-            }
-            
-            new Conexao(this, cliente, leitor, saida);
         }
-        // TODO: lidar com max de conexões
-        // System.out.println("SERVIDOR: limite de conexões atingido (" + conexoes.size() + "/" + MAX_CONEXOES + "). Parando de aceitar novas conexões");
     }
-    
+
+    public boolean conectar(String nome, GerenciadorCliente gc) {
+        if (this.clientes.containsKey(nome))
+            return false;
+
+        serverBroadcast(nome + " entrou no servidor!");
+        addCliente(nome, gc);
+        return true;
+    }
+
+    public void desconectar(GerenciadorCliente gc) {
+        try {
+            gc.getCliente().close();
+            removerCliente(gc.getNome());
+            serverBroadcast(gc.getNome() + " saiu do servidor!");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void addCliente(String nome, GerenciadorCliente gc) {
+        this.clientes.put(nome, gc);
+    }
+
+    private void removerCliente(String nome) {
+        this.clientes.remove(nome);
+    }
+
+    public boolean isConectado() {
+        return conectado;
+    }
+
+    public String getEndereço() {
+        return endereço;
+    }
+
+    public int getPorta() {
+        return porta;
+    }
+
+    public void log(String s) {
+        System.out.println("[server] " + s);
+    }
+
+    private void serverBroadcast(String msg) {
+        for (GerenciadorCliente gc : clientes.values()) {
+            gc.enviar("server", msg);
+        }
+    }
+
+    public void broadcast(GerenciadorCliente remetente, String msg) {
+        for (GerenciadorCliente gc : clientes.values()) {
+            if (gc.equals(remetente)) continue;
+
+            gc.enviar(remetente.getNome(), msg);
+        }
+    }
+
+    public void parar() throws IOException {
+        this.conectado = false;
+        log("Servidor fechando...");
+        serverBroadcast("Servidor fechando...");
+        for (GerenciadorCliente gc : new ArrayList<>(clientes.values())) {
+            desconectar(gc);
+        }
+        this.socket.close();
+    }
+
     public static void main(String[] args) throws IOException {
-        
-        new Servidor().iniciar();
-    }
-}
+        String endereco;
+        int porta;
+        if (args.length != 2) {
+            endereco = "localhost";
+            porta = 6767;
+        } else {
+            endereco = args[0];
+            porta = Integer.parseInt(args[1]);
+        }
 
-class Gerenciador implements Runnable {
-    Scanner teclado;
-    Servidor servidor;
+        var server = new Servidor(endereco, porta);
+        new Thread(server::executar).start();
 
-    Gerenciador(Scanner teclado, Servidor servidor) {
-        this.teclado = teclado;
-        this.servidor = servidor;
-
-        new Thread(this, "gerenciador").start();
-    }
-
-    public void run() {
+        Scanner teclado = new Scanner(System.in);
         while (teclado.hasNextLine()) {
             String s = teclado.nextLine();
 
             if (s.equals("exit")) {
+                server.parar();
                 break;
             }
-            if (s.equals("info")) {
-                servidor.info();
-            }
-            if (s.equals("help")) {
-                servidor.help();
-            }
         }
-        servidor.encerrar();
+        teclado.close();
     }
 }
 
-class Conexao implements Runnable {
-    private static final String NOME_PADRAO = "Usuário";
+class GerenciadorCliente implements Runnable {
+    private Servidor servidor;
+    private Socket cliente;
+    private String nome;
+    BufferedReader entrada;
+    PrintWriter saida;
 
-    Socket clienteSocket;
-    Scanner clienteIn;
-    PrintStream clienteOut;
-    Servidor servidor;
-    String nome;
-    
-    public Conexao(Servidor servidor, Socket clienteSocket, Scanner clienteIn, PrintStream clienteOut) {
+    public GerenciadorCliente(Servidor servidor, Socket cliente) throws IOException {
         this.servidor = servidor;
-        this.clienteIn = clienteIn;
-        this.clienteOut = clienteOut;
-        this.clienteSocket = clienteSocket;
+        this.cliente = cliente;
+        this.nome = "_";
+        this.entrada = new BufferedReader(new InputStreamReader(cliente.getInputStream()));
+        this.saida = new PrintWriter(cliente.getOutputStream(), true);
 
-        iniciar();
+        new Thread(this).start();
     }
-    
-    public void iniciar() {
-        System.out.println("SERVIDOR: Esperando cliente digitar seu nome...");
-        nome = "";
-        if (clienteIn.hasNextLine()) nome = clienteIn.nextLine();
-        nome = nome.trim();
-        if (nome.isEmpty()) nome = NOME_PADRAO;
+
+    public boolean autenticar() throws IOException {
+        enviar("server", "Digite seu nome: ");
         
-        servidor.addConexao(this);
-        new Thread(this, "conexão_" + nome).start();;
-    }
-    
-    public void run() {
-        while (clienteIn.hasNextLine()) {
-            String entrada = clienteIn.nextLine();
-            
-            if (entrada.equals("exit")) {
-                break;
-            }
-            
-            // System.out.println(nome + ": " + entrada);
-            servidor.broadcastMensagem(this, entrada);
+        String s = entrada.readLine().strip();
+        
+        if (s.isBlank())  {
+            servidor.log("Falha ao se autenticar com " + cliente.getInetAddress().getHostAddress());
+            enviar("server", "O nome digitado já está sendo usado!");
+            return false;
         }
 
-        servidor.removerConexao(this);
+        this.nome = s;
+        servidor.log("Cliente em " + cliente.getInetAddress().getHostAddress() + " se autenticou como " + nome);
+        return servidor.conectar(nome, this);
+    }
+
+    public void enviar(String remetente, String msg) {
+        this.saida.println("[" + remetente + "] " + msg);
+    }
+
+    public void run() {
+        servidor.log("Conexão estabelecida com " + cliente.getInetAddress().getHostAddress());
+        try {
+            if (!autenticar())
+                return;
+
+            while (servidor.isConectado()) {
+                String s = entrada.readLine();
+                if (s == null) break;
+
+                servidor.broadcast(this, s);
+            }
+        } catch (IOException e) {
+            if (servidor.isConectado()) e.printStackTrace();
+        }
+
+        servidor.desconectar(this);
+        servidor.log("Conexão com [" + nome + "] encerrada.");
+    }
+
+    public Socket getCliente() {
+        return cliente;
+    }
+
+    public String getNome() {
+        return nome;
     }
 }
